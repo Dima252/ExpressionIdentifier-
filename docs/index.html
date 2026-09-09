@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="How two unseeded train/val splits inflated a face-expression classifier by 22 points, and the cross-validated numbers that replaced them.">
+
+<style>
+  /* baseline the artifact host normally provides */
+  html{color-scheme:light dark}
+  body{margin:0}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+</style>
+<title>Two Lines of Leakage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --paper:#f5f6f7;
+  --card:#fefefe;
+  --ink:#14171a;
+  --ink-2:#4d555e;
+  --ink-3:#7a838d;
+  --rule:#dbdfe4;
+  --rule-2:#eaedf0;
+  --verified:#2a78d6;
+  --verified-soft:#e2edfb;
+  --void:#e34948;
+  --void-soft:#fbe6e6;
+  --grid:#e6e9ed;
+  --shadow:0 1px 2px rgba(20,23,26,.06),0 8px 24px -12px rgba(20,23,26,.14);
+  --display:'Archivo','Helvetica Neue',Arial,sans-serif;
+  --body:'Source Serif 4',Georgia,'Times New Roman',serif;
+  --mono:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+  --measure:39rem;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --paper:#15171a;
+    --card:#1c1f23;
+    --ink:#eef1f4;
+    --ink-2:#a4aeb8;
+    --ink-3:#78828c;
+    --rule:#2b3037;
+    --rule-2:#23272c;
+    --verified:#3987e5;
+    --verified-soft:#1a2a3f;
+    --void:#e66767;
+    --void-soft:#3a2222;
+    --grid:#272c32;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --paper:#15171a;
+  --card:#1c1f23;
+  --ink:#eef1f4;
+  --ink-2:#a4aeb8;
+  --ink-3:#78828c;
+  --rule:#2b3037;
+  --rule-2:#23272c;
+  --verified:#3987e5;
+  --verified-soft:#1a2a3f;
+  --void:#e66767;
+  --void-soft:#3a2222;
+  --grid:#272c32;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--body);
+  font-size:1.0625rem;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:63rem;margin:0 auto;padding:0 1.5rem 5rem}
+.col{max-width:var(--measure)}
+p{margin:0 0 1.05em}
+a{color:var(--verified)}
+strong{font-weight:600}
+em{font-style:italic}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ---------- masthead ---------- */
+.mast{
+  display:flex;flex-wrap:wrap;gap:.75rem 1.5rem;align-items:baseline;
+  padding:1.6rem 0 1.5rem;border-bottom:1px solid var(--rule);
+}
+.mast .who{font-family:var(--mono);font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)}
+.mast .who b{color:var(--ink-2);font-weight:500}
+
+/* ---------- hero ---------- */
+.hero{padding:3.2rem 0 2.4rem}
+.kicker{
+  font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--void);margin-bottom:1.1rem;display:flex;align-items:center;gap:.55rem;
+}
+.kicker::before{content:"";width:1.6rem;height:2px;background:var(--void);display:block}
+h1{
+  font-size:clamp(2.5rem,6.4vw,4.35rem);font-weight:800;line-height:.98;
+  letter-spacing:-.032em;margin-bottom:1.1rem;
+}
+.stand{font-size:1.24rem;line-height:1.5;color:var(--ink-2);max-width:34rem}
+.stand b{color:var(--ink);font-weight:600}
+
+/* ---------- headline figure pair ---------- */
+.swap{
+  display:flex;flex-wrap:wrap;align-items:flex-end;gap:1.1rem 2.4rem;
+  margin:2.6rem 0 0;padding:1.5rem 0 0;border-top:1px solid var(--rule);
+}
+.fig{display:flex;flex-direction:column;gap:.3rem}
+.fig .lab{font-family:var(--mono);font-size:.68rem;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.fig .num{font-family:var(--display);font-size:3.5rem;font-weight:800;letter-spacing:-.035em;line-height:1;font-variant-numeric:tabular-nums}
+.fig.was .num{color:var(--void);text-decoration:line-through;text-decoration-thickness:3px}
+.fig.is .num{color:var(--verified)}
+.fig .sub{font-family:var(--mono);font-size:.72rem;color:var(--ink-3)}
+.arrow{font-family:var(--display);font-size:1.7rem;color:var(--ink-3);padding-bottom:1.1rem;font-weight:500}
+
+/* ---------- contact sheet ---------- */
+.sheet{margin:3.2rem 0 0;border:1px solid var(--rule);background:var(--card);border-radius:2px;overflow:hidden}
+.sheet-hd{
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:.4rem;
+  padding:.7rem .9rem;border-bottom:1px solid var(--rule);
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.06em;color:var(--ink-3);text-transform:uppercase;
+}
+.rows{display:grid;grid-template-columns:1fr}
+.srow{display:flex;align-items:center;gap:.9rem;padding:.85rem .9rem}
+.srow + .srow{border-top:1px solid var(--rule-2)}
+.srow .cls{
+  font-family:var(--mono);font-size:.75rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  width:3.6rem;flex:none;color:var(--ink-2);
+}
+.strip{display:flex;gap:.4rem;overflow-x:auto;padding-bottom:2px}
+.strip img{
+  width:62px;height:62px;flex:none;display:block;
+  image-rendering:pixelated;border:1px solid var(--rule);background:#000;border-radius:1px;
+}
+.sheet-ft{padding:.7rem .9rem;border-top:1px solid var(--rule);font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+
+/* ---------- sections ---------- */
+section{padding:3.4rem 0 0}
+.stage{
+  display:flex;align-items:baseline;gap:.8rem;margin-bottom:1.4rem;
+  padding-bottom:.55rem;border-bottom:1px solid var(--rule);
+}
+.stage .n{
+  font-family:var(--mono);font-size:.7rem;font-weight:600;letter-spacing:.12em;color:var(--ink-3);
+  flex:none;padding-top:.15rem;
+}
+h2{font-size:1.72rem;font-weight:700;letter-spacing:-.021em;line-height:1.15}
+h3{font-size:.78rem;font-family:var(--mono);font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-2);margin:2.1rem 0 .8rem}
+
+/* ---------- code ---------- */
+.code{
+  font-family:var(--mono);font-size:.78rem;line-height:1.7;
+  background:var(--card);border:1px solid var(--rule);border-radius:2px;
+  padding:.9rem 1rem;overflow-x:auto;margin:0 0 1rem;white-space:pre;color:var(--ink-2);
+}
+.code .bad{color:var(--void);font-weight:500}
+.code .good{color:var(--verified);font-weight:500}
+.code .cm{color:var(--ink-3)}
+.codecap{font-family:var(--mono);font-size:.7rem;color:var(--ink-3);margin:-.5rem 0 1.6rem;letter-spacing:.03em}
+
+/* ---------- charts ---------- */
+figure{margin:1.6rem 0 2rem}
+figcaption{font-family:var(--mono);font-size:.71rem;color:var(--ink-3);margin-top:.85rem;line-height:1.55}
+.chart{background:var(--card);border:1px solid var(--rule);border-radius:2px;padding:1.1rem 1.15rem .8rem}
+.legend{display:flex;gap:1.1rem;flex-wrap:wrap;margin-bottom:1.1rem;font-family:var(--mono);font-size:.72rem;color:var(--ink-2)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:.4rem;vertical-align:-1px}
+.k-void{background:var(--void)}
+.k-ver{background:var(--verified)}
+
+.plot{position:relative}
+/* the track column is the only place marks are drawn; gridlines must match it exactly */
+.gridlines{
+  position:absolute;top:0;bottom:1.35rem;
+  left:calc(var(--gut) + .7rem);right:calc(var(--valw) + .7rem);pointer-events:none;
+}
+.gridlines span{position:absolute;top:0;bottom:0;width:1px;background:var(--grid)}
+.gridlines span.ref{
+  background:none;border-left:2px dashed var(--ink-3);width:0;
+}
+.reflab{
+  position:absolute;top:-.15rem;font-family:var(--mono);font-size:.63rem;color:var(--ink-3);
+  white-space:nowrap;transform:translateX(-100%);padding-right:.35rem;
+}
+.brow{
+  position:relative;display:grid;grid-template-columns:var(--gut) 1fr var(--valw);
+  align-items:center;gap:0 .7rem;padding:.3rem 0;
+}
+.brow .name{font-family:var(--mono);font-size:.715rem;color:var(--ink-2);line-height:1.3;text-align:right}
+.brow .name small{display:block;color:var(--ink-3);font-size:.66rem}
+.bars,.vals{display:flex;flex-direction:column;gap:2px}
+.bar{height:13px}
+.bar .fill{height:100%;border-radius:0 3px 3px 0;min-width:2px}
+.bar.v .fill{background:var(--verified)}
+.bar.x .fill{background:var(--void)}
+.val{
+  height:13px;line-height:13px;font-family:var(--mono);font-size:.685rem;font-weight:500;
+  color:var(--ink-2);white-space:nowrap;
+}
+.val.x{color:var(--void)}
+.val.v{color:var(--verified)}
+.val .sd{color:var(--ink-3);font-weight:400}
+.axis{display:grid;grid-template-columns:var(--gut) 1fr var(--valw);gap:0 .7rem;margin-top:.35rem}
+.ticks{position:relative;height:1.1rem}
+.ticks span{position:absolute;transform:translateX(-50%);font-family:var(--mono);font-size:.66rem;color:var(--ink-3)}
+.chip{
+  display:inline-block;font-family:var(--mono);font-size:.6rem;letter-spacing:.07em;text-transform:uppercase;
+  padding:.08rem .3rem;border-radius:2px;background:var(--void-soft);color:var(--void);margin-left:.3rem;font-weight:600;
+}
+.tip{
+  position:absolute;left:0;bottom:calc(100% + 5px);z-index:5;
+  background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:.68rem;line-height:1.45;
+  padding:.35rem .5rem;border-radius:3px;white-space:nowrap;opacity:0;pointer-events:none;
+  transition:opacity .12s ease;box-shadow:var(--shadow);
+}
+.brow:hover .tip,.brow:focus-within .tip{opacity:1}
+
+/* ---------- table ---------- */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--rule);border-radius:2px;background:var(--card)}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:.735rem;font-variant-numeric:tabular-nums}
+th,td{padding:.5rem .7rem;text-align:right;white-space:nowrap;border-bottom:1px solid var(--rule-2)}
+th{font-weight:600;font-size:.66rem;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);text-align:right}
+th:first-child,td:first-child{text-align:left}
+tbody tr:last-child td{border-bottom:none}
+td.was{color:var(--void);text-decoration:line-through}
+td.is{color:var(--verified);font-weight:600}
+tr.hl td{background:var(--verified-soft)}
+
+/* ---------- callout ---------- */
+.note{
+  border-left:3px solid var(--verified);background:var(--card);
+  padding:.95rem 1.1rem;margin:1.8rem 0;border-radius:0 2px 2px 0;
+}
+.note p:last-child{margin-bottom:0}
+.note .h{font-family:var(--mono);font-size:.68rem;letter-spacing:.11em;text-transform:uppercase;color:var(--verified);margin-bottom:.4rem;font-weight:600}
+
+/* ---------- takeaways ---------- */
+.takes{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:2px;margin-top:1.4rem}
+.take{background:var(--card);padding:1.05rem 1.15rem}
+.take .t{font-family:var(--display);font-weight:700;font-size:1rem;letter-spacing:-.01em;margin-bottom:.35rem}
+.take p{margin:0;font-size:.95rem;color:var(--ink-2);line-height:1.55}
+
+/* ---------- post block ---------- */
+.post{
+  background:var(--card);border:1px solid var(--rule);border-radius:2px;
+  padding:1.2rem 1.3rem;font-family:var(--body);font-size:.98rem;line-height:1.6;
+}
+.post p{margin:0 0 .85em}
+.post p:last-child{margin-bottom:0}
+.post .tags{font-family:var(--mono);font-size:.75rem;color:var(--verified)}
+
+footer{
+  margin-top:4rem;padding-top:1.3rem;border-top:1px solid var(--rule);
+  font-family:var(--mono);font-size:.7rem;color:var(--ink-3);line-height:1.7;
+}
+@media (max-width:640px){
+  :root{--measure:100%}
+  .fig .num{font-size:2.6rem}
+  .arrow{display:none}
+  .brow{grid-template-columns:1fr var(--valw);gap:.2rem .7rem}
+  .brow .name{text-align:left;grid-column:1 / -1}
+  .gridlines{left:0;right:calc(var(--valw) + .7rem)}
+  .axis{grid-template-columns:1fr var(--valw)}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+:focus-visible{outline:2px solid var(--verified);outline-offset:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="mast">
+    <div class="who"><b>Expression Identifier</b> · binary face-expression classifier</div>
+    <div class="who">Shalev Yosefashvili · Dimitry Todoseyev</div>
+  </div>
+
+  <div class="hero">
+    <div class="kicker">Post-mortem</div>
+    <h1>Two lines of leakage</h1>
+    <p class="stand">Our happy-vs-sad classifier reported <b>95.8%</b>. The real number was <b>74.2%</b>. The gap was two calls to <span class="mono">random_split</span> — and finding it was worth more than the score.</p>
+
+    <div class="swap">
+      <div class="fig was">
+        <div class="lab">Reported</div>
+        <div class="num">95.8%</div>
+        <div class="sub">ResNet50 fine-tuned</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="fig is">
+        <div class="lab">Verified</div>
+        <div class="num">74.2%</div>
+        <div class="sub">same code, disjoint split</div>
+      </div>
+      <div class="fig">
+        <div class="lab">Best honest result</div>
+        <div class="num" id="hero-best">—</div>
+        <div class="sub" id="hero-best-sub">5-fold cross-validated</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sheet">
+    <div class="sheet-hd">
+      <span>The data · 600 images · balanced 300 / 300</span>
+      <span>48 × 48 px · grayscale</span>
+    </div>
+    <div class="rows">
+      <div class="srow"><span class="cls">Happy</span><div class="strip"><img src="data:image/png;base64,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" alt="Happy face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Happy face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Happy face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Happy face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Happy face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Happy face crop, 48 by 48 pixels" width="48" height="48"></div></div>
+      <div class="srow"><span class="cls">Sad</span><div class="strip"><img src="data:image/png;base64,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" alt="Sad face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAAAAAByaaZbAAAG30lEQVR4nAXB244cVxUA0L332eecqq6qrr7MjGemE9/iOImREgRECIQieAiR+AX+iD9B4gPgLSBQgAcUiSTGdpw4sSftmZ6e7q57nStr4a/tCKAipfUi22Y2IDe7PsnvnEaD6+2wc94Gz4KEdREgIlfSo+gFRKba5IlPvTvqdfkjNjGwqQBiiBggBKAQYiSmPkQfOAnofN/NJo140xzo5NioGGX3gq0gBzFQIIwxIPJE2NiLlJFMsNsTnh7z+lZ1opiMRUlqAOljAAoUASA6bkfGgma+S5zPDt1ZqQ8nAm4xSh6INZFA8gQRPAAiAg/gwWelukp3IvNDyuZEbpaZYJiIRpSiBmEpROBA5ChGRmWE0qXYWZDpxHaizIdJGVkAB10u6XCT2REgWIgRMAZWQWstd4nkiG11ZCYzb8uZJCCYqMWM+T9hvkV2Y/TsAxCPJKw7Xi26i7jBe9n8eL62RY4SEBVMb99kv/xvTYwIgQJiJMZ0j/joXX+j8PTu8cXyCLZHs+i1gIhRHRdXq9XTi63BiDESxsCzXaPUIusfhuiOJs0Jv5R3xBicgBRlYk0Z3L3jby/3YwgOMRKPBy9klpbSChJ8upT7+3ltyVGCEEnGxI6s59a1oyAnwPG1ZVIUlC6F8K50F4us5eh0HCjpZD/IJDiv1IQQJHgS1E/yHhjISa2yfFWbt7BGF2ic6OvR3vDxMpGgHaboUaIPPNW7USXKTnA0yOpY76Jtu5Xs5NWojXKXm/2QjA6K2kBAjFwcQCUL6WF8cWF0Pql3MbXt6L43h7Dvh8ofoh2ECHpiDSMiWyvpNA9qd9XZ8fAy6srnyXDM2d94S76WSTH3Lw6FoqS1XkBgkxVqBknExermytbrOkxT8Yu3bPn0Sa0rKyHrpmWYjoNUYBCIVcbopQgZXz39pvthS4uOHk2b+R7LRbd8mPz52etpeUt2rF3ACMA9eqQJ8Lj+NHuvePzt6Vk9uXt3DpBPH6aY6E++nzaXbUZBIEQEYGG06kPkzvw+vxEPrjpaokjIJBPRndtdWHJ1P+lc0ZJwBAicNeo9O6Y80znDeh+SUs+JIUrF/SVjYbNb1bAMh5FUHAIiL1btG11/ggXtdc6nbsBVdEA0Rje0RT/kR+1+UZgeQ0pgA/DhN/PrN5pAPonXprdN/iAEAjO0JtiNznfDVbukyocQRD55DUihf/B+b6IfaFo4zu4/oiAJOdGpMNrqO2V6a9K6oZ/49CxmueCjV3+VcDwq5xyeMimXxEMhBaQq3Q/WsZa03qYtjSHvClEBDWu8+3BinG0OByukYfzaYbRO5hO1N51UodqJlnjkxWw11sh4I/OIqBovo5Iu0X/XJwBBZHJyBC4MFCx1YxIC58X/qiRSFP/4NlOIGVvGIap/Xd/TQUi20WPqQ4t2aOpCWivxyWMhE17Q5k/52433tntV3s6ef/NB9axdroarq+fXYapEI6FSJ5UH/++LeckLPq5x84dPfuu95q5W1VfLVf/0s8U7prt81aks+jYBnObVKH94mZTvmRlX651p/vhhhomKzh2q96n83bv15bNrOAExhYB1mgrlAjiS02Kb8M4MRtqKxonQGb46P0JMH4WtbLnqWYY2i0Nemd4BxlybhLgzIUqzR1JQhEP1E5+QQZaz8/T1RnjXFJMtGucdGAxpedDUUUy0ehGDZRXGO8ccYoBxV75xfuskozgeInait9IH6i3QjDWEwi2ejwgYDZyDFZxYNU8LcWJrY8i2aDMzBBNpfNbdfs7zjaCU15dnAYwtdWXKi82mOV/ZbeW1FDEGj4Xt7egIu+eXI0eILsXh87M+MTFxW/vZF5vah3N9Yydlmpi0TgB8C0OvHC7HlEUUKRv5+a9kNhjZXH/91fbw43vDZSXl5ss8n9FUINqRm+D0eDMDFpCk0SdX//yo8h108aMPHn//8R0pDvbp0/XBqyq32VDHdi+EU8NlxtYVzkTWn67uk238WcI/fb96uWx9HZJ8NRmk9sl1FxpDMaK2noTwI7hkXv+lG8YDlAIrUeJmjGZj7t31XnXcjLXdRwjRBex4kJbEPhWrF198OK+Et0Z/B+zJNuJ2/6QpdnL8Lm2jEDFgIGIOAwWDbjc/+fJn5PTI9ZXZv3auZ2xdTsNEX/S+46T1IhLgKWvvgxWVr86pSeeFh+nrx/vAmAo1i9Iv1WYz3ypWOniKIjbsZ8MO2ItqzFqFEX3+TiI1EXZ919sp3AypGwuTNWofCbHjsyd50y/E7nZD7NdlLm3xMHUehtBHqeB108Va66B5OF2LRI1891JNv7bvxublx89/vv+qeFtF5arOmDEIc+hDc21dDkTTi7Nu+yZ2/wcpTza2YCY9ngAAAABJRU5ErkJggg==" alt="Sad face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAAAAAByaaZbAAAFrklEQVR4nD2UO49kVxVGv2/vfe6tqu6aaY8NBhtZsngYWRAxgAERYCQIkCwiEjICAiRLEJDxJ8j4C0SIhIDAISEpLwtkLMw87OmZ7q6uuvecvT8CS0grXtJKFt88fLDYmNGTaN1RImReYWmZZtN8p25jd6b3nts/yF/92E41m0zDQJcBZhGEWZjTGRx7LPv9Iv/Uo+n1V15ymxQOZiRRFQgPs3CS7oC5Mc5y9TPrZ/7g3i++3q0fqSINTtFoDgKN9JlmYYiBs+OBu8GLj/7km9WuluEwdhbMEFX0YCpmTi1soGGZ/Fmalv15/+O7bsGaWFUkHKKHVyHirPnGw7wFcnp1tyrm6fz8D7+R5TJvjTLRKA/K3CbfzWicrODUHDw7dnP3dv7Xd8z2ftnBFCl0IWbE1CZrMQWjxegS+q4vlWLz38dz+WhM7WQQXZAHSFI2xUB5pY3uevHZtdDh4+YUT5drTUWSzaSI7K1Z2SbQDGNAOkwZNnZWCs/34mnuro9hZQ0QxFBwytgUbKoY61q2Ns7r8POTlWW0hig5CQQmlm+W1thGM3KX3QK0ATvvu4+mxaWIDmcGJmQEIhnYrt7MnBU0m2s4sojHcy6Coq0nqDWLNmwibJIPRsxmRVKBEUUSPI2IKsUYcs7NrG1Hy6kM3Wq3BUUAcMgyRfi22NZCbHBV87RxWnNNU2LaJqMIGUVHWVmBELysjYyddn2KaG6YQFEWMKiywgiAJB0CUBBticVDm01rYWUlurMxls5UiSBooqsSQFlVt82E1oKQBd1a+MS5L6F+OkEiQIIAgMyh7DH56OE0l0wwuvnN5b1+u67bjdMKKlCiZBrItOkLr+4bnQWauwA7/nffD+upQzQziAZBUFWOKvvst964I4ckJNwt1vfu4lZa0wgAEqqkGlVjjBz20u6NVyYBBCmZ28PWDpXrqQ9AEqnqmYnsmdnT9k8/ff8uVZVD5uLNzf4wsvfTGAJEk0gImVVVJds8uXntTKUSJEIPuS79NNYsJ0kCqhKkHCOzFF+7PR2PVaQgyZbL+VAcPCoizQzSx6hGphLxu3evDldGF2dP+VPVLdLr6Of/j5ZUlVVVGIjfnh2ubNpvwF6Qjg2r5nFsO0uUqGIVKquPqlIhzrePZ64f7u5EL6Brzi3vrK3Nk33sh1SiqgAIiLPLdQPiuO435fSNOLPxhVrpAqooAFBJJagY9cRBmvUnm22Ecd5u3Wtk9ALTUFmoUqmKED2ul40GqTZuj3OYb3ebjQZQvUYhJaBUJQECTPHEHFLSg+tynOLpzefcEclaYE7Rslgji1S5j1jCJJSjMLf9+nDf/mPnDT441oZoNYDMEinIgyEzBaoCwsrvPDh769dPm8Fou1o2aZSqZxKwgYukIWZxpaSiPvrL8/df/P7NYRk1uL8YFjXG6XZNFQDmz350J3w7H25nEAVGfbD97t8+c//PLRibuC4QeXNz1gAZKj/5Zusxx2HAMgCjKi//sdVXb9+/N0929XBu8H5obiUC7F+5uPmJ3anTIQqeMoH98Hc++tcnzlaMp/+snfz4RNPay4xkfJu756OWdbbeMqkyjnz/5X/3UauP68Jhe7xaN5BRZpWvvH4738apJ0ZYwumAxtWHp8u0fEbsH7fTaVQMbyXCxjd3y75bDjh3rdNFkms9ulgW7YjZL+xEtqE4rhTWL/6AdzxsrDGdC/AyVVnqsmn00XDspGV5P9uTh8rXfvnllzeFKJuQGh5VRkFjXXbXGlZZo8TG7Qsn7j5//qXvvRZKKHKOxBhTCRCI4+7q3gdrWSkzC9Pdu7h88tbPgWKlSKNljeEwr5LANQ/nsfaeoySV0fr1/Z9u82ELrFcpqwHrw5RlAAWuJ51npVSVaUYe77794u2z3KBf3doDG0FVTER+/F07jpsLJ6TKFHyq4w+/cXP7mFE3y735nf8BC7rtijyjtUIAAAAASUVORK5CYII=" alt="Sad face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Sad face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Sad face crop, 48 by 48 pixels" width="48" height="48"><img src="data:image/png;base64,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" alt="Sad face crop, 48 by 48 pixels" width="48" height="48"></div></div>
+    </div>
+    <div class="sheet-ft">Real crops from the training set, shown at 130% with no smoothing. 585 of 600 are FER2013 face crops; 15 are stray RGB stock photos up to 6000 × 4000.</div>
+  </div>
+
+  <section>
+    <div class="stage"><span class="n">01</span><h2>What the code actually did</h2></div>
+    <div class="col">
+      <p>The augmentation step needed two views of the same folder: augmented images to train on, clean images to validate against. It built them with two separate splits.</p>
+    </div>
+<div class="code"><span class="cm"># train and val are drawn from two different shuffles of the same 600 files</span>
+full_dataset_aug   = ImageFolder(root=data_path, transform=train_transform_aug)
+train_dataset_final, _ = <span class="bad">random_split</span>(full_dataset_aug,   [train_size, val_size])
+
+full_dataset_clean = ImageFolder(root=data_path, transform=val_transform)
+_, val_dataset_final   = <span class="bad">random_split</span>(full_dataset_clean, [train_size, val_size])</div>
+    <p class="codecap">Two unseeded shuffles → two different permutations → ~80% of the validation set is also in the training set.</p>
+    <div class="col">
+      <p>Neither call is seeded, so each produces its own permutation. Roughly four out of five validation images were also being trained on. The notebook even flagged it in a comment — <span class="mono">“hacky but works for this scope”</span> — which is how most leaks get committed: noticed, downgraded, shipped.</p>
+      <p>The fix is to split the indices once and reuse them, so the two datasets differ only in transform.</p>
+    </div>
+<div class="code">g = torch.Generator().manual_seed(SEED)
+perm = torch.randperm(len(full_dataset), generator=g).tolist()
+<span class="good">train_idx, val_idx</span> = perm[:train_size], perm[train_size:]
+
+train_dataset_final = Subset(dataset_aug,   <span class="good">train_idx</span>)   <span class="cm"># augmented</span>
+val_dataset_final   = Subset(dataset_clean, <span class="good">val_idx</span>)     <span class="cm"># clean</span>
+assert not (set(train_idx) &amp; set(val_idx))          <span class="cm"># Overlap: 0</span></div>
+    <p class="codecap">Both cells now print their overlap. A leak that can reappear silently will.</p>
+  </section>
+
+  <section>
+    <div class="stage"><span class="n">02</span><h2>What it was worth</h2></div>
+    <div class="col">
+      <p>We re-ran all eight experiments on the corrected split. Experiments 5–8 used the leaking loaders; 1–4 never did, and their movement is just reseeding noise.</p>
+    </div>
+
+    <figure>
+      <div class="chart" style="--gut:11.5rem;--valw:3.6rem">
+        <div class="legend">
+          <span><i class="k-void"></i>Reported in the original run</span>
+          <span><i class="k-ver"></i>Verified on a disjoint split</span>
+        </div>
+        <div class="plot" id="plot-exp"></div>
+      </div>
+      <figcaption>Validation accuracy, final epoch. Single 480 / 120 split, identical code and hyper-parameters. Hover any row for the training accuracy that made the gap possible.</figcaption>
+    </figure>
+
+    <div class="note">
+      <div class="h">The pattern</div>
+      <p>The leak only paid out to models that could memorize. Experiments 6 and 8 reached 94–96% training accuracy and lost <strong>22 points</strong> when the overlap was removed. Experiment 5 — the same leaking loaders, but with dropout and augmentation holding it to 70% training accuracy — lost nothing. It had no capacity left to memorize the answers it was being shown.</p>
+      <p>Which means the run that looked <em>worst</em> was the only one telling the truth.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="stage"><span class="n">03</span><h2>Every number, before and after</h2></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Experiment</th><th>Reported</th><th>Verified</th><th>Δ</th><th>Train acc</th></tr>
+        </thead>
+        <tbody id="tbl-body"></tbody>
+      </table>
+    </div>
+    <p class="codecap" style="margin-top:.7rem">Experiments 1–4 used a correct split all along; their deltas are reseed noise on a 120-image validation set, where one image is worth 0.83 points.</p>
+  </section>
+
+  <section>
+    <div class="stage"><span class="n">04</span><h2>Rebuilding it honestly</h2></div>
+    <div class="col">
+      <p>A 120-image validation set makes single-split results almost unreadable — one image moves the number by 0.83 points, and picking the best of 15 epochs is itself a way of fitting the test set. So we rebuilt the evaluation before touching the model: <strong>5-fold stratified cross-validation</strong> over all 600 images, every image predicted exactly once by a model that never trained on it, with horizontal-flip test-time augmentation.</p>
+      <p>Then we changed one thing at a time.</p>
+    </div>
+
+    <figure>
+      <div class="chart" style="--gut:13rem;--valw:6.4rem">
+        <div class="plot" id="plot-cv"></div>
+      </div>
+      <figcaption>Out-of-fold accuracy across all 600 images, mean ± standard deviation over 5 folds. Dashed marker shows the original project's best honest result for reference.</figcaption>
+    </figure>
+
+    <div class="col">
+      <p id="cv-read">Two findings, both larger than the noise band.</p>
+    </div>
+
+    <div class="takes" id="findings"></div>
+  </section>
+
+  <section>
+    <div class="stage"><span class="n">05</span><h2>What we'd tell the next person</h2></div>
+    <div class="takes">
+      <div class="take">
+        <div class="t">Print the overlap, not the accuracy</div>
+        <p>Every split should assert its own disjointness and say so out loud. One <span class="mono">assert</span> would have caught this on the first run instead of the fiftieth.</p>
+      </div>
+      <div class="take">
+        <div class="t">A result that beats your baseline by 19 points is a bug report</div>
+        <p>The from-scratch notebook appeared to beat a fine-tuned ResNet34 by nineteen points. That was the tell, and we read it as success for weeks.</p>
+      </div>
+      <div class="take">
+        <div class="t">Fix the measurement before the model</div>
+        <p>On 120 validation images, nothing under about 8 points apart is distinguishable. Half our "findings" were coin flips until cross-validation replaced them.</p>
+      </div>
+      <div class="take">
+        <div class="t">Overfitting is a smoke alarm for leakage</div>
+        <p>96% train against 70% validation is a data-starvation signature. When that gap suddenly closes without new data, suspect the split before celebrating.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="stage"><span class="n">06</span><h2>Ready to post</h2></div>
+    <div class="col"><p>Draft caption — edit freely.</p></div>
+    <div class="post" id="post"></div>
+  </section>
+
+  <footer>
+    Binary happy / sad classification · FER2013 subset, 600 images · PyTorch 2.14 CPU · 5-fold stratified cross-validation, hflip TTA<br>
+    All figures reproduced from the re-executed notebook. Numbers marked <span class="mono">Reported</span> are void and shown only for comparison.
+  </footer>
+</div>
+
+<script>
+// ---- data ---------------------------------------------------------------
+const EXP = [
+  {n:"1 · Shallow CNN + Adam",        was:70.00, is:65.83, tr:100.0, leak:false},
+  {n:"2 · Deep CNN + Adam",           was:66.67, is:68.33, tr:99.38, leak:false},
+  {n:"3 · Shallow CNN + SGD",         was:68.33, is:65.83, tr:79.58, leak:false},
+  {n:"4 · Deep CNN + BatchNorm",      was:63.33, is:70.00, tr:99.38, leak:false},
+  {n:"5 · + Dropout + augmentation",  was:70.00, is:72.50, tr:70.00, leak:true},
+  {n:"6 · CIFAR-10 pretrain → tune",  was:94.17, is:71.67, tr:93.75, leak:true},
+  {n:"7 · ResNet50 frozen",           was:74.17, is:65.83, tr:71.25, leak:true},
+  {n:"8 · ResNet50 unfrozen",         was:95.83, is:74.17, tr:96.04, leak:true}
+];
+const CV = [{"n": "DeepCNN from scratch", "sub": "64 px \u00b7 20 epochs \u00b7 no pretraining", "short": "from-scratch CNN", "m": 60.67, "s": 3.7, "f": [63.33, 62.5, 62.5, 61.67, 53.33]}, {"n": "ResNet18 fine-tuned", "sub": "64 px \u00b7 ImageNet weights \u00b7 8 epochs", "short": "ResNet18 at 64 px", "m": 79.17, "s": 2.04, "f": [77.5, 77.5, 81.67, 77.5, 81.67]}, {"n": "ResNet18 fine-tuned", "sub": "224 px \u00b7 ImageNet weights + stats", "short": "ResNet18 at 224 px", "m": 87.33, "s": 0.62, "f": [87.5, 88.33, 86.67, 86.67, 87.5]}];
+const REF = 76.67;
+
+// ---- helpers ------------------------------------------------------------
+const pct = v => v.toFixed(2) + "%";
+function gridlines(host){
+  const g = document.createElement("div"); g.className = "gridlines";
+  [0,25,50,75,100].forEach(t=>{ const s=document.createElement("span"); s.style.left=t+"%"; g.appendChild(s); });
+  host.appendChild(g);
+}
+function axis(host){
+  const a=document.createElement("div"); a.className="axis";
+  a.innerHTML='<div></div><div class="ticks">'+[0,25,50,75,100].map(t=>
+    `<span style="left:${t}%">${t}%</span>`).join("")+'</div><div></div>';
+  host.appendChild(a);
+}
+
+// ---- chart: experiments -------------------------------------------------
+(function(){
+  const host = document.getElementById("plot-exp");
+  gridlines(host);
+  EXP.forEach(e=>{
+    const row = document.createElement("div"); row.className="brow"; row.tabIndex=0;
+    const d = (e.is-e.was);
+    row.innerHTML =
+      `<div class="name">${e.n}${e.leak?'<span class="chip">leaked</span>':''}</div>
+       <div class="bars">
+         <div class="bar x"><div class="fill" style="width:${e.was}%"></div></div>
+         <div class="bar v"><div class="fill" style="width:${e.is}%"></div></div>
+       </div>
+       <div class="vals">
+         <div class="val x">${pct(e.was)}</div>
+         <div class="val v">${pct(e.is)}</div>
+       </div>
+       <div class="tip">train ${pct(e.tr)} · ${d>=0?"+":""}${d.toFixed(2)} pts on correction</div>`;
+    host.appendChild(row);
+  });
+  axis(host);
+})();
+
+// ---- table --------------------------------------------------------------
+(function(){
+  const b = document.getElementById("tbl-body");
+  EXP.forEach(e=>{
+    const d=(e.is-e.was), tr=document.createElement("tr");
+    if(e.leak && Math.abs(d)>15) tr.className="hl";
+    tr.innerHTML = `<td>${e.n.replace(" · ",". ")}</td><td class="was">${pct(e.was)}</td>`+
+      `<td class="is">${pct(e.is)}</td><td>${d>=0?"+":""}${d.toFixed(2)}</td><td>${pct(e.tr)}</td>`;
+    b.appendChild(tr);
+  });
+})();
+
+// ---- chart: cross-validation -------------------------------------------
+(function(){
+  const host = document.getElementById("plot-cv");
+  if(!CV.length){ host.innerHTML='<p class="mono" style="font-size:.75rem;color:var(--ink-3)">Run in progress.</p>'; return; }
+  gridlines(host);
+  // reference: the original project's best honest single-split result
+  const g = host.querySelector(".gridlines");
+  const r = document.createElement("span"); r.className="ref"; r.style.left=REF+"%"; g.appendChild(r);
+  const rl = document.createElement("span"); rl.className="reflab"; rl.style.left=REF+"%";
+  rl.textContent = "original best "+REF.toFixed(1)+"%"; g.appendChild(rl);
+  CV.forEach(c=>{
+    const row=document.createElement("div"); row.className="brow"; row.tabIndex=0;
+    row.innerHTML =
+      `<div class="name">${c.n}<small>${c.sub}</small></div>
+       <div class="bars"><div class="bar v"><div class="fill" style="width:${c.m}%"></div></div></div>
+       <div class="vals"><div class="val v">${pct(c.m)} <span class="sd">± ${c.s.toFixed(2)}</span></div></div>
+       <div class="tip">folds ${c.f.map(x=>x.toFixed(1)).join(" · ")}</div>`;
+    host.appendChild(row);
+  });
+  axis(host);
+  const best = CV.reduce((a,b)=>b.m>a.m?b:a);
+  const el=document.getElementById("hero-best");
+  el.textContent = best.m.toFixed(1)+"%";
+  document.getElementById("hero-best-sub").textContent = best.short+" · 5-fold CV";
+  document.getElementById("cv-read").innerHTML =
+    `Pretraining is worth <strong>${(CV[1].m-CV[0].m).toFixed(0)} points</strong> over training from scratch, and giving that same backbone its native resolution is worth <strong>${(CV[2].m-CV[1].m).toFixed(0)} more</strong> — despite the source images being 48 × 48, so the upscaling adds no information at all. Both gaps are far outside the ±${Math.max(...CV.map(c=>c.s)).toFixed(1)}-point fold spread.`;
+  document.getElementById("findings").innerHTML =
+    `<div class="take"><div class="t">Freezing was the real mistake, not resolution</div>
+      <p>The original frozen ResNet50 scored 65.8%. The same family of backbone, fully fine-tuned at the same 64 px, reaches ${pct(CV[1].m)}. A frozen ImageNet head on 48 × 48 grayscale faces has almost nothing to offer.</p></div>
+     <div class="take"><div class="t">Upscaling adds no pixels, but it adds accuracy</div>
+      <p>Resizing 48 × 48 crops to 224 px invents no detail. It gains ${(CV[2].m-CV[1].m).toFixed(1)} points anyway, because an ImageNet backbone's strides and receptive fields expect that scale — at 64 px the deep layers see almost nothing.</p></div>
+     <div class="take"><div class="t">The from-scratch CNN was never close</div>
+      <p>Under cross-validation it lands at ${pct(CV[0].m)}, twelve points below what its luckiest single split reported. Six hundred images is not enough to learn faces from nothing.</p></div>
+     <div class="take"><div class="t">Data is still the binding constraint</div>
+      <p>Every model here saturates its training set. FER2013 ships roughly 9,000 happy and 6,000 sad images; we used 600. That, not architecture, is the next ${(90-CV[2].m).toFixed(0)} points.</p></div>`;
+})();
+
+// ---- post copy ----------------------------------------------------------
+(function(){
+  const best = CV.length ? CV.reduce((a,b)=>b.m>a.m?b:a) : null;
+  document.getElementById("post").innerHTML = `
+   <p>Our face-expression classifier reported 95.8% accuracy. The real number was 74.2%.</p>
+   <p>The cause was two lines. To train on augmented images while validating on clean ones, we loaded the folder twice and split it twice — with no shared seed. Two shuffles, two different permutations, and about 80% of our validation set was sitting in the training set.</p>
+   <p>What made it interesting is who benefited. Only the models with room to memorize: the two runs hitting 94–96% training accuracy lost 22 points when we fixed it. The run with heavy dropout and augmentation, capped at 70% training accuracy, lost nothing. The experiment that looked worst was the only honest one in the notebook.</p>
+   <p>We rebuilt the evaluation before touching the model — 5-fold cross-validation over all 600 images instead of one 120-image split, where a single image is worth 0.83 points.${best?` The honest ceiling on this data is ${best.m.toFixed(1)}%, from ${best.short}.`:""}</p>
+   <p>Three things we took from it: assert that your splits are disjoint and print it; treat a result that beats your baseline by 19 points as a bug report, not a win; and fix your measurement before you tune anything.</p>
+   <p class="tags">#MachineLearning #ComputerVision #PyTorch #DataLeakage #MLEngineering</p>`;
+})();
+</script>
+</body>
+</html>

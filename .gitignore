@@ -1,0 +1,5 @@
+data_cifar/
+*.pth
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
